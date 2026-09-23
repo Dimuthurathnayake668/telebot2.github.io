@@ -151,7 +151,7 @@ try { tg?.ready(); tg?.expand(); } catch (e) {}
 // ever show an OLD build tag, Telegram served a cached copy of this page
 // and nothing below even ran yet — that alone proves the problem is
 // client-side caching, not the bot/YAML logic.
-const BUILD_TAG = "cats-diag-2026-09-23a";
+const BUILD_TAG = "cats-diag-2026-09-23b-urlwins";
 
 const params    = new URLSearchParams(location.search);
 const profileId = params.get("profile") || "default";
@@ -279,11 +279,10 @@ document.getElementById("save").onclick = () => {
     }
   };
 
-  // Write to CloudStorage FIRST so that even if Telegram reopens a
-  // cached page next time, the live CloudStorage read on init still
-  // returns this exact selection. Don't let a CloudStorage failure
-  // block the actual save to the bot though. Also has its own timeout
-  // so a hung CloudStorage call can never trap the user on this screen.
+  // Also mirror the value into CloudStorage purely so the diagnostic
+  // line stays informative — it is NOT used to decide what's checked on
+  // reopen (see initSelection below for why). Never let this block the
+  // actual save to the bot.
   let settled = false;
   const settle = () => { if (!settled) { settled = true; finish(); } };
   try {
@@ -299,45 +298,27 @@ document.getElementById("save").onclick = () => {
 };
 
 // Resolve the true starting selection before we ever render.
-// CloudStorage.getItem is a live network call to Telegram's servers on
-// every open, so it can't be served from a stale cached page the way
-// the "sel=" URL param can. Guarded with a timeout so a hung/unsupported
-// call can never leave the page blank.
+//
+// IMPORTANT: the bot builds `sel=` fresh from disk (default_categories in
+// the profile YAML) every single time it sends/edits a menu message, so
+// url.sel IS the authoritative, live truth. CloudStorage is NOT used for
+// initial state anymore — it's sticky/stale by nature (it only updates
+// when this exact page's Save button runs, so if the YAML is ever
+// changed another way, or an old test selection was saved, CloudStorage
+// silently drifts out of sync and overrides the correct value). We only
+// read CloudStorage here for the diagnostic line, never to decide what
+// gets checked.
 function initSelection() {
-  let settled = false;
-  const proceedOnce = () => {
-    if (settled) return;
-    settled = true;
-    paintDiag();
-    loadCategories();
-  };
+  diagSource = "url (authoritative)";
   try {
     if (tg?.CloudStorage?.getItem) {
       tg.CloudStorage.getItem(CLOUD_KEY, (err, value) => {
-        if (!err && value) {
-          selected = new Set(value.split(",").filter(Boolean));
-          diagSource = "cloud";
-          diagCloudRaw = value;
-        } else {
-          diagSource = "url (cloud empty/err: " + (err || "no value") + ")";
-          diagCloudRaw = err ? ("err:" + err) : "(empty)";
-        }
-        proceedOnce();
+        diagCloudRaw = err ? ("err:" + err) : (value || "(empty)");
+        paintDiag();
       });
-      setTimeout(() => {
-        if (!settled) {
-          diagSource = "url (cloud getItem timed out)";
-          diagCloudRaw = "(timeout)";
-        }
-        proceedOnce();
-      }, 1500);
-      return;
-    } else {
-      diagSource = "url (CloudStorage not supported on this client)";
     }
-  } catch (e) {
-    diagSource = "url (CloudStorage threw: " + e + ")";
-  }
+  } catch (e) {}
+  paintDiag();
   loadCategories();
 }
 
