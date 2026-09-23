@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Categories</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg:    var(--tg-theme-bg-color,          #ffffff);
+    --text:  var(--tg-theme-text-color,        #000000);
+    --hint:  var(--tg-theme-hint-color,        #707579);
+    --link:  var(--tg-theme-link-color,        #2481cc);
+    --btn:   var(--tg-theme-button-color,      #2481cc);
+    --btntx: var(--tg-theme-button-text-color, #ffffff);
+    --card:  var(--tg-theme-secondary-bg-color,#f4f4f5);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    padding: 12px 16px;
+    background: var(--bg);
+    border-bottom: 1px solid rgba(127,127,127,0.15);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header .title { font-weight: 600; }
+  header .count { font-size: 14px; color: var(--hint); }
+  header .count b { color: var(--text); }
+
+  .toolbar {
+    display: flex; gap: 8px; padding: 10px 16px;
+  }
+  .toolbar button {
+    flex: 1; padding: 10px; border: none; border-radius: 8px;
+    background: var(--card); color: var(--text);
+    font-size: 14px; font-weight: 500;
+  }
+  .toolbar button:active { opacity: 0.6; }
+
+  ul { list-style: none; margin: 0; padding: 0 8px 100px 8px; }
+  li {
+    display: flex; align-items: center;
+    padding: 14px 12px; margin: 0 0 4px 0;
+    border-radius: 10px; background: var(--card);
+    cursor: pointer; user-select: none;
+    transition: background 0.05s;
+  }
+  li:active { background: rgba(127,127,127,0.15); }
+  li .box {
+    width: 22px; height: 22px;
+    border: 2px solid var(--hint); border-radius: 6px;
+    margin-right: 12px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.1s, border-color 0.1s;
+  }
+  li.on .box {
+    background: var(--btn); border-color: var(--btn);
+  }
+  li .box svg { display: none; }
+  li.on .box svg { display: block; }
+  li .label { flex: 1; font-size: 15px; line-height: 1.3; }
+  li .code { color: var(--hint); font-size: 12px; margin-left: 6px; }
+
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 1px solid rgba(127,127,127,0.15);
+    display: flex; gap: 8px;
+  }
+  footer button {
+    flex: 1; padding: 14px; border: none; border-radius: 10px;
+    font-size: 16px; font-weight: 600;
+  }
+  .save { background: var(--btn); color: var(--btntx); }
+  .cancel { background: var(--card); color: var(--text); }
+  footer button:active { opacity: 0.7; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">Job categories</span>
+  <span class="count"><b id="cnt">0</b> / <span id="tot">31</span></span>
+</header>
+
+<div class="toolbar">
+  <button id="all">✅ Select all</button>
+  <button id="none">🗑 Clear all</button>
+</div>
+
+<ul id="list"></ul>
+
+<footer>
+  <button class="cancel" id="cancel">Cancel</button>
+  <button class="save" id="save">💾 Save</button>
+</footer>
+
+<script>
+// Fallback list in case the JSON fetch fails. Keep it in sync with
+// categories.json on GitHub Pages for maximum safety.
+const FALLBACK_CATEGORIES = [
+  ["SDQ","IT-Sware/DB/QA/Web/Graphics/GIS"],
+  ["HNS","IT-HWare/Networks/Systems"],
+  ["ACA","Accounting/Auditing/Finance"],
+  ["BAF","Banking & Finance/Insurance"],
+  ["SMM","Sales/Marketing/Merchandising"],
+  ["HAT","HR/Training"],
+  ["COM","Corporate Management/Analysts"],
+  ["OAS","Office Admin/Secretary/Receptionist"],
+  ["CCE","Civil Eng/Interior Design/Architecture"],
+  ["ITT","IT-Telecoms"],
+  ["CUR","Customer Relations/Public Relations"],
+  ["LWT","Logistics/Warehouse/Transport"],
+  ["MAE","Eng-Mech/Auto/Elec"],
+  ["POS","Manufacturing/Operations"],
+  ["MAC","Media/Advert/Communication"],
+  ["HRF","Hotel/Restaurant/Hospitality"],
+  ["HOT","Travel/Tourism"],
+  ["SRF","Sports/Fitness/Recreation"],
+  ["MHN","Medical/Nursing/Healthcare"],
+  ["LEL","Legal/Law"],
+  ["SQC","Supervision/Quality Control"],
+  ["APC","Apparel/Clothing"],
+  ["AIM","Ticketing/Airline/Marine"],
+  ["TAL","Education"],
+  ["RLT","R&D/Science/Research"],
+  ["AGD","Agriculture/Dairy/Environment"],
+  ["SEC","Security"],
+  ["BEC","Fashion/Design/Beauty"],
+  ["IDV","International Development"],
+  ["KPO","KPO/BPO"],
+  ["IME","Imports/Exports"],
+];
+
+const tg = window.Telegram?.WebApp;
+try { tg?.ready(); tg?.expand(); } catch (e) {}
+
+const params  = new URLSearchParams(location.search);
+const initial = (params.get("sel") || "").split(",").filter(Boolean);
+const selected = new Set(initial);
+
+let CATEGORIES = FALLBACK_CATEGORIES;
+
+const list = document.getElementById("list");
+const cnt  = document.getElementById("cnt");
+const tot  = document.getElementById("tot");
+
+const CHECK_COLOR = (getComputedStyle(document.documentElement)
+  .getPropertyValue("--btntx") || "#fff").trim();
+const CHECK_SVG =
+  '<svg viewBox="0 0 24 24" width="14" height="14">' +
+  '<path fill="' + CHECK_COLOR + '" ' +
+  'd="M9 16.2l-3.5-3.5L4 14.2l5 5 11-11-1.4-1.4z"/></svg>';
+
+function render() {
+  list.innerHTML = "";
+  for (const [code, name] of CATEGORIES) {
+    const li = document.createElement("li");
+    li.dataset.code = code;
+    if (selected.has(code)) li.classList.add("on");
+    li.innerHTML =
+      '<span class="box">' + CHECK_SVG + '</span>' +
+      '<span class="label">' + escapeHtml(name) +
+      ' <span class="code">' + code + '</span></span>';
+    li.addEventListener("click", () => toggle(code));
+    list.appendChild(li);
+  }
+  cnt.textContent = selected.size;
+}
+
+function toggle(code) {
+  // Pure local. Zero network. Instant.
+  if (selected.has(code)) selected.delete(code);
+  else                    selected.add(code);
+  const li = list.querySelector('li[data-code="' + code + '"]');
+  if (li) li.classList.toggle("on", selected.has(code));
+  cnt.textContent = selected.size;
+  try { tg?.HapticFeedback?.selectionChanged?.(); } catch (e) {}
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+// Try to pull the live list from categories.json on GitHub Pages.
+// If it fails (offline, cache miss), we keep the fallback.
+async function loadCategories() {
+  try {
+    const r = await fetch("categories.json?_=" + Date.now(),
+                          { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (Array.isArray(j.categories) && j.categories.length) {
+      CATEGORIES = j.categories;
+    }
+  } catch (e) {
+    console.warn("using fallback categories:", e.message);
+  }
+  tot.textContent = CATEGORIES.length;
+  render();
+}
+
+document.getElementById("all").onclick = () => {
+  CATEGORIES.forEach(([c]) => selected.add(c));
+  render();
+};
+document.getElementById("none").onclick = () => {
+  selected.clear();
+  render();
+};
+
+document.getElementById("cancel").onclick = () => {
+  try { tg?.close(); } catch (e) { history.back(); }
+};
+
+document.getElementById("save").onclick = () => {
+  if (selected.size === 0) {
+    try { tg?.showAlert?.("Pick at least one category."); }
+    catch (e) { alert("Pick at least one category."); }
+    return;
+  }
+  const ordered = CATEGORIES.map(([c]) => c).filter(c => selected.has(c));
+  const payload = ordered.join(",");
+  try {
+    tg.sendData(payload);
+    tg.close();
+  } catch (e) {
+    // Fallback if sendData is unavailable
+    document.body.innerHTML =
+      "<pre style='padding:16px'>" + escapeHtml(payload) + "</pre>";
+  }
+};
+
+loadCategories();
+</script>
+</body>
+</html>
