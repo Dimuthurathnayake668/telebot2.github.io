@@ -90,6 +90,10 @@
   <span class="title">Job categories</span>
   <span class="count"><b id="cnt">0</b> / <span id="tot">31</span></span>
 </header>
+<div id="diag" style="padding:6px 16px;font-size:11px;color:var(--hint);
+     border-bottom:1px solid rgba(127,127,127,0.15);word-break:break-all;">
+  loading diagnostics…
+</div>
 
 <div class="toolbar">
   <button id="all">✅ Select all</button>
@@ -143,6 +147,12 @@ const FALLBACK_CATEGORIES = [
 const tg = window.Telegram?.WebApp;
 try { tg?.ready(); tg?.expand(); } catch (e) {}
 
+// Bump this string every time you redeploy. If the on-screen diagnostics
+// ever show an OLD build tag, Telegram served a cached copy of this page
+// and nothing below even ran yet — that alone proves the problem is
+// client-side caching, not the bot/YAML logic.
+const BUILD_TAG = "cats-diag-2026-09-23a";
+
 const params    = new URLSearchParams(location.search);
 const profileId = params.get("profile") || "default";
 // CloudStorage key is per-Telegram-user AND per-profile. This is the
@@ -156,6 +166,21 @@ const urlInitial = (params.get("sel") || "").split(",").filter(Boolean);
 
 let selected = new Set(urlInitial);   // fallback until CloudStorage responds
 let CATEGORIES = FALLBACK_CATEGORIES;
+let diagSource   = "url (cloud not yet checked)";
+let diagCloudRaw = "(n/a)";
+
+function paintDiag() {
+  const el = document.getElementById("diag");
+  if (!el) return;
+  el.textContent =
+    "build=" + BUILD_TAG +
+    " | cloudSupported=" + !!(tg && tg.CloudStorage) +
+    " | source=" + diagSource +
+    " | url.sel=" + (urlInitial.join(",") || "(empty)") +
+    " | cloud.raw=" + diagCloudRaw +
+    " | using=" + Array.from(selected).join(",");
+}
+paintDiag();
 
 const list = document.getElementById("list");
 const cnt  = document.getElementById("cnt");
@@ -182,6 +207,7 @@ function render() {
     list.appendChild(li);
   }
   cnt.textContent = selected.size;
+  paintDiag();
 }
 
 function toggle(code) {
@@ -191,6 +217,7 @@ function toggle(code) {
   const li = list.querySelector('li[data-code="' + code + '"]');
   if (li) li.classList.toggle("on", selected.has(code));
   cnt.textContent = selected.size;
+  paintDiag();
   try { tg?.HapticFeedback?.selectionChanged?.(); } catch (e) {}
 }
 
@@ -255,34 +282,62 @@ document.getElementById("save").onclick = () => {
   // Write to CloudStorage FIRST so that even if Telegram reopens a
   // cached page next time, the live CloudStorage read on init still
   // returns this exact selection. Don't let a CloudStorage failure
-  // block the actual save to the bot though.
+  // block the actual save to the bot though. Also has its own timeout
+  // so a hung CloudStorage call can never trap the user on this screen.
+  let settled = false;
+  const settle = () => { if (!settled) { settled = true; finish(); } };
   try {
     if (tg?.CloudStorage?.setItem) {
-      tg.CloudStorage.setItem(CLOUD_KEY, payload, () => finish());
+      tg.CloudStorage.setItem(CLOUD_KEY, payload, () => settle());
+      setTimeout(settle, 1500);
     } else {
-      finish();
+      settle();
     }
   } catch (e) {
-    finish();
+    settle();
   }
 };
 
 // Resolve the true starting selection before we ever render.
 // CloudStorage.getItem is a live network call to Telegram's servers on
 // every open, so it can't be served from a stale cached page the way
-// the "sel=" URL param can.
+// the "sel=" URL param can. Guarded with a timeout so a hung/unsupported
+// call can never leave the page blank.
 function initSelection() {
+  let settled = false;
+  const proceedOnce = () => {
+    if (settled) return;
+    settled = true;
+    paintDiag();
+    loadCategories();
+  };
   try {
     if (tg?.CloudStorage?.getItem) {
       tg.CloudStorage.getItem(CLOUD_KEY, (err, value) => {
         if (!err && value) {
           selected = new Set(value.split(",").filter(Boolean));
+          diagSource = "cloud";
+          diagCloudRaw = value;
+        } else {
+          diagSource = "url (cloud empty/err: " + (err || "no value") + ")";
+          diagCloudRaw = err ? ("err:" + err) : "(empty)";
         }
-        loadCategories();
+        proceedOnce();
       });
+      setTimeout(() => {
+        if (!settled) {
+          diagSource = "url (cloud getItem timed out)";
+          diagCloudRaw = "(timeout)";
+        }
+        proceedOnce();
+      }, 1500);
       return;
+    } else {
+      diagSource = "url (CloudStorage not supported on this client)";
     }
-  } catch (e) {}
+  } catch (e) {
+    diagSource = "url (CloudStorage threw: " + e + ")";
+  }
   loadCategories();
 }
 
